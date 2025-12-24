@@ -1,16 +1,14 @@
 import asyncio
+import json
 import streamlit as st
-from datetime import datetime
 from agents import Agent, Runner, set_tracing_disabled, AsyncOpenAI
 from agents.mcp import MCPServerStdio
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 import os
 from dotenv import load_dotenv
 
-# .envファイルから環境変数を読み込み
+# 初期設定
 load_dotenv()
-
-# トレース機能を無効にする（オフにしないと401エラーが出る）
 set_tracing_disabled(disabled=True)
 
 # 環境変数から設定を取得
@@ -20,11 +18,10 @@ AZURE_OPENAI_DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
 AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
 MCP_SERVER_PACKAGE = os.getenv("MCP_SERVER_PACKAGE", "awslabs.aws-documentation-mcp-server@latest")
 
-# メインエリア
+# UI設定
 st.title("OpenAI Agent SDK MCPエージェント")
 st.text("Azure OpenAIとMCPサーバーを使用したエージェント")
 
-# 設定状況を表示
 with st.expander("設定状況"):
     st.write(f"**Azure OpenAI エンドポイント**: {AZURE_OPENAI_ENDPOINT or '未設定'}")
     st.write(f"**デプロイメント名**: {AZURE_OPENAI_DEPLOYMENT_NAME or '未設定'}")
@@ -69,109 +66,97 @@ def create_agent(mcp_server, custom_client):
         mcp_servers=[mcp_server],
     )
 
-async def stream_response(agent, question, container):
-    """レスポンスをストリーミング表示"""
-    text_holder = container.empty()
+def extract_tool_executions(result):
+    """結果からツール実行情報を抽出"""
+    tool_executions = []
     
-    try:
-        # エージェント実行
-        result = await Runner.run(agent, question)
-        
-        # 結果を表示
-        if hasattr(result, 'final_output'):
-            text_holder.markdown(result.final_output)
-        else:
-            text_holder.markdown(str(result))
-        
-        # Usage情報を表示
-        usage_info = None
-        if hasattr(result, 'raw_responses'):
-            for raw_response in result.raw_responses:
-                if hasattr(raw_response, 'usage'):
-                    usage_info = raw_response.usage
-                    break
-        
-        if usage_info:
-            with st.expander("トークン使用量"):
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("入力トークン", usage_info.input_tokens)
-                with col2:
-                    st.metric("出力トークン", usage_info.output_tokens)
-                with col3:
-                    st.metric("合計トークン", usage_info.total_tokens)
-                
-                if hasattr(usage_info, 'input_tokens_details') and usage_info.input_tokens_details:
-                    if hasattr(usage_info.input_tokens_details, 'cached_tokens'):
-                        st.info(f"キャッシュされたトークン: {usage_info.input_tokens_details.cached_tokens}")
-        
-        # ツール実行情報を抽出・表示（VSCode IDE風）
-        tool_executions = []
-        
-        # raw_responsesからResponseFunctionToolCallを抽出
-        if hasattr(result, 'raw_responses'):
-            for raw_response in result.raw_responses:
-                if hasattr(raw_response, 'output'):
-                    for output_item in raw_response.output:
-                        # ResponseFunctionToolCallを検出
-                        if hasattr(output_item, 'name') and hasattr(output_item, 'arguments'):
-                            try:
-                                import json
-                                args_dict = json.loads(output_item.arguments)
-                                tool_executions.append({
-                                    'name': output_item.name,
-                                    'arguments': args_dict,
-                                    'call_id': getattr(output_item, 'call_id', 'unknown')
-                                })
-                            except json.JSONDecodeError:
-                                tool_executions.append({
-                                    'name': output_item.name,
-                                    'arguments': output_item.arguments,
-                                    'call_id': getattr(output_item, 'call_id', 'unknown')
-                                })
-        
-        # ツール実行情報を表示（VSCode IDE風）
-        if tool_executions:
-            with st.expander(f"ツール実行 ({len(tool_executions)}回)"):
-                for i, tool in enumerate(tool_executions, 1):
-                    # ツール名をヘッダーとして表示
-                    st.markdown(f"### `{tool['name']}`")
-                    
-                    # パラメータを整形表示
-                    if isinstance(tool['arguments'], dict):
-                        st.markdown("**パラメータ:**")
-                        for key, value in tool['arguments'].items():
-                            # 値の型に応じて表示を調整
-                            if isinstance(value, str) and len(value) > 100:
-                                # 長い文字列は折りたたみ表示
-                                with st.expander(f"📄 {key}"):
-                                    st.text(value)
-                            elif isinstance(value, (list, dict)):
-                                # リストや辞書はJSON表示
-                                st.code(f"{key}: {json.dumps(value, indent=2, ensure_ascii=False)}", language="json")
-                            else:
-                                # その他は通常表示
-                                st.code(f"{key}: {value}")
-                    else:
-                        # 辞書でない場合はそのまま表示
-                        st.code(tool['arguments'], language="json")
-                    
-                    # Call IDを小さく表示
-                    st.caption(f"Call ID: {tool['call_id']}")
-                    
-                    # 区切り線（最後以外）
-                    if i < len(tool_executions):
-                        st.divider()
-        else:
-            st.info("この質問ではツールは使用されませんでした")
+    if not hasattr(result, 'raw_responses'):
+        return tool_executions
+    
+    for raw_response in result.raw_responses:
+        if not hasattr(raw_response, 'output'):
+            continue
             
-    except Exception as e:
-        error_message = str(e)
-        if "RateLimitReached" in error_message:
-            text_holder.error("レート制限に達しました。60秒後に再試行してください。")
-            st.info("💡 **対処方法**:\n- 60秒待ってから再試行\n- Azure OpenAIポータルでクォータ増加を申請\n- より軽量なモデルに変更")
-        else:
-            text_holder.error(f"エラーが発生しました: {error_message}")
+        for output_item in raw_response.output:
+            if hasattr(output_item, 'name') and hasattr(output_item, 'arguments'):
+                try:
+                    args_dict = json.loads(output_item.arguments)
+                except json.JSONDecodeError:
+                    args_dict = output_item.arguments
+                
+                tool_executions.append({
+                    'name': output_item.name,
+                    'arguments': args_dict,
+                    'call_id': getattr(output_item, 'call_id', 'unknown')
+                })
+    
+    return tool_executions
+
+def display_tool_executions(tool_executions):
+    """ツール実行履歴を表示"""
+    if not tool_executions:
+        st.info("この質問ではツールは使用されませんでした")
+        return
+    
+    with st.expander(f"🔧 ツール実行履歴 ({len(tool_executions)}回)"):
+        for i, tool in enumerate(tool_executions, 1):
+            st.markdown(f"### `{tool['name']}`")
+            
+            if isinstance(tool['arguments'], dict):
+                st.markdown("**パラメータ:**")
+                for key, value in tool['arguments'].items():
+                    if isinstance(value, str) and len(value) > 100:
+                        with st.expander(f"📄 {key}"):
+                            st.text(value)
+                    elif isinstance(value, (list, dict)):
+                        st.code(f"{key}: {json.dumps(value, indent=2, ensure_ascii=False)}", language="json")
+                    else:
+                        st.code(f"{key}: {value}")
+            else:
+                st.code(tool['arguments'], language="json")
+            
+            st.caption(f"Call ID: {tool['call_id']}")
+            
+            if i < len(tool_executions):
+                st.divider()
+
+def display_usage_info(result):
+    """Usage情報を表示"""
+    usage_info = None
+    if hasattr(result, 'raw_responses'):
+        for raw_response in result.raw_responses:
+            if hasattr(raw_response, 'usage'):
+                usage_info = raw_response.usage
+                break
+    
+    if not usage_info:
+        return
+    
+    with st.expander("📊 トークン使用量"):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("入力トークン", usage_info.input_tokens)
+        with col2:
+            st.metric("出力トークン", usage_info.output_tokens)
+        with col3:
+            st.metric("合計トークン", usage_info.total_tokens)
+        
+        if (hasattr(usage_info, 'input_tokens_details') and 
+            usage_info.input_tokens_details and
+            hasattr(usage_info.input_tokens_details, 'cached_tokens')):
+            st.info(f"キャッシュされたトークン: {usage_info.input_tokens_details.cached_tokens}")
+
+def display_available_tools(tools):
+    """利用可能なツール一覧を表示"""
+    if not tools:
+        return
+        
+    with st.expander(f"🔧 利用可能なツール ({len(tools)}個)"):
+        for i, tool in enumerate(tools, 1):
+            st.markdown(f"### {i}. 🛠️ {tool.name}")
+            st.markdown(f"📝 {tool.description}")
+            if i < len(tools):
+                st.markdown("---")
 
 async def run_agent_async(question, container):
     """非同期でエージェントを実行"""
@@ -181,113 +166,24 @@ async def run_agent_async(question, container):
     async with mcp_server:
         # ツール一覧を表示
         tools = await mcp_server.list_tools()
-        if tools:
-            with st.expander(f"利用可能なツール ({len(tools)}個)"):
-                for i, tool in enumerate(tools, 1):
-                    # ツール名を大きく表示
-                    st.markdown(f"### {i}. 🛠️ {tool.name}")
-                    # 説明を少し小さく表示
-                    st.markdown(f"📝 {tool.description}")
-                    
-                    # 区切り線（最後以外）
-                    if i < len(tools):
-                        st.markdown("---")
+        display_available_tools(tools)
         
         agent = create_agent(mcp_server, custom_client)
-        
-        # エージェント実行
         result = await Runner.run(agent, question)
         
-        # ツール実行履歴を時系列順で表示
-        tool_executions = []
-        
-        # raw_responsesからResponseFunctionToolCallを時系列順で抽出
-        if hasattr(result, 'raw_responses'):
-            for raw_response in result.raw_responses:
-                if hasattr(raw_response, 'output'):
-                    for output_item in raw_response.output:
-                        # ResponseFunctionToolCallを検出
-                        if hasattr(output_item, 'name') and hasattr(output_item, 'arguments'):
-                            try:
-                                import json
-                                args_dict = json.loads(output_item.arguments)
-                                tool_executions.append({
-                                    'name': output_item.name,
-                                    'arguments': args_dict,
-                                    'call_id': getattr(output_item, 'call_id', 'unknown')
-                                })
-                            except json.JSONDecodeError:
-                                tool_executions.append({
-                                    'name': output_item.name,
-                                    'arguments': output_item.arguments,
-                                    'call_id': getattr(output_item, 'call_id', 'unknown')
-                                })
-        
-        # ツール実行がある場合のみ表示
-        if tool_executions:
-            st.markdown("### 🔧 ツール実行履歴")
-            
-            for i, tool in enumerate(tool_executions, 1):
-                # ツール名とCall IDを表示
-                col1, col2 = st.columns([4, 1])
-                
-                with col1:
-                    st.markdown(f"**{i}. 🛠️ `{tool['name']}`**")
-                
-                with col2:
-                    st.caption(f"Call: {tool['call_id'][:8]}...")
-                
-                # パラメータをコードブロックで表示
-                if isinstance(tool['arguments'], dict):
-                    params_text = []
-                    for key, value in tool['arguments'].items():
-                        if isinstance(value, (list, dict)):
-                            import json
-                            params_text.append(f"{key}: {json.dumps(value, ensure_ascii=False)}")
-                        else:
-                            params_text.append(f"{key}: {value}")
-                    
-                    st.code("\n".join(params_text), language="yaml")
-                else:
-                    st.code(str(tool['arguments']))
-                
-                # 区切り線
-                if i < len(tool_executions):
-                    st.markdown("---")
-            
-            st.markdown("")  # 空行を追加
+        # ツール実行履歴を表示
+        tool_executions = extract_tool_executions(result)
+        display_tool_executions(tool_executions)
         
         # 最終回答を表示
         with container:
-            # 結果を表示
             if hasattr(result, 'final_output'):
                 st.markdown(result.final_output)
             else:
                 st.markdown(str(result))
             
-            # Usage情報を表示
-            usage_info = None
-            if hasattr(result, 'raw_responses'):
-                for raw_response in result.raw_responses:
-                    if hasattr(raw_response, 'usage'):
-                        usage_info = raw_response.usage
-                        break
-            
-            if usage_info:
-                with st.expander("📊 トークン使用量"):
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("入力トークン", usage_info.input_tokens)
-                    with col2:
-                        st.metric("出力トークン", usage_info.output_tokens)
-                    with col3:
-                        st.metric("合計トークン", usage_info.total_tokens)
-                    
-                    if hasattr(usage_info, 'input_tokens_details') and usage_info.input_tokens_details:
-                        if hasattr(usage_info.input_tokens_details, 'cached_tokens'):
-                            st.info(f"キャッシュされたトークン: {usage_info.input_tokens_details.cached_tokens}")
+            display_usage_info(result)
 
-# 設定チェック
 def check_configuration():
     """必要な設定がすべて揃っているかチェック"""
     missing = []
@@ -300,7 +196,7 @@ def check_configuration():
     
     return missing
 
-# ボタンを押したら生成開始
+# メイン実行部分
 if st.button("質問する"):
     missing_config = check_configuration()
     
@@ -311,108 +207,16 @@ if st.button("質問する"):
         with st.spinner("回答を生成中…"):
             container = st.container()
             
-            # 非同期実行
             try:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-                loop.run_until_complete(
-                    run_agent_async(question, container)
-                )
+                loop.run_until_complete(run_agent_async(question, container))
             except Exception as e:
-                st.error(f"実行エラー: {str(e)}")
+                error_message = str(e)
+                if "RateLimitReached" in error_message:
+                    st.error("レート制限に達しました。60秒後に再試行してください。")
+                    st.info("💡 **対処方法**:\n- 60秒待ってから再試行\n- Azure OpenAIポータルでクォータ増加を申請\n- より軽量なモデルに変更")
+                else:
+                    st.error(f"実行エラー: {error_message}")
             finally:
                 loop.close()
-
-def display_tool_executions(result, container):
-    """ツール実行履歴を時系列順で表示"""
-    tool_executions = []
-    
-    # raw_responsesからResponseFunctionToolCallを時系列順で抽出
-    if hasattr(result, 'raw_responses'):
-        for raw_response in result.raw_responses:
-            if hasattr(raw_response, 'output'):
-                for output_item in raw_response.output:
-                    # ResponseFunctionToolCallを検出
-                    if hasattr(output_item, 'name') and hasattr(output_item, 'arguments'):
-                        try:
-                            import json
-                            args_dict = json.loads(output_item.arguments)
-                            tool_executions.append({
-                                'name': output_item.name,
-                                'arguments': args_dict,
-                                'call_id': getattr(output_item, 'call_id', 'unknown')
-                            })
-                        except json.JSONDecodeError:
-                            tool_executions.append({
-                                'name': output_item.name,
-                                'arguments': output_item.arguments,
-                                'call_id': getattr(output_item, 'call_id', 'unknown')
-                            })
-    
-    # ツール実行がある場合のみ表示
-    if tool_executions:
-        with container:
-            st.markdown("### 🔧 ツール実行履歴")
-            
-            for i, tool in enumerate(tool_executions, 1):
-                # ツール実行をカードスタイルで表示
-                with st.container():
-                    col1, col2 = st.columns([3, 1])
-                    
-                    with col1:
-                        st.markdown(f"**{i}. 🛠️ `{tool['name']}`**")
-                    
-                    with col2:
-                        st.caption(f"Call: {tool['call_id'][:8]}...")
-                    
-                    # パラメータを整形表示
-                    if isinstance(tool['arguments'], dict):
-                        params_text = []
-                        for key, value in tool['arguments'].items():
-                            if isinstance(value, str) and len(value) > 50:
-                                params_text.append(f"**{key}**: `{value[:50]}...`")
-                            elif isinstance(value, (list, dict)):
-                                params_text.append(f"**{key}**: `{type(value).__name__}`")
-                            else:
-                                params_text.append(f"**{key}**: `{value}`")
-                        
-                        st.markdown(" | ".join(params_text))
-                    else:
-                        st.code(str(tool['arguments'])[:100] + "..." if len(str(tool['arguments'])) > 100 else str(tool['arguments']))
-                    
-                    # 区切り線
-                    if i < len(tool_executions):
-                        st.markdown("---")
-            
-            st.markdown("")  # 空行を追加
-
-async def display_final_response(result, container):
-    """最終レスポンスとUsage情報を表示"""
-    with container:
-        # 結果を表示
-        if hasattr(result, 'final_output'):
-            st.markdown(result.final_output)
-        else:
-            st.markdown(str(result))
-        
-        # Usage情報を表示
-        usage_info = None
-        if hasattr(result, 'raw_responses'):
-            for raw_response in result.raw_responses:
-                if hasattr(raw_response, 'usage'):
-                    usage_info = raw_response.usage
-                    break
-        
-        if usage_info:
-            with st.expander("📊 トークン使用量"):
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("入力トークン", usage_info.input_tokens)
-                with col2:
-                    st.metric("出力トークン", usage_info.output_tokens)
-                with col3:
-                    st.metric("合計トークン", usage_info.total_tokens)
-                
-                if hasattr(usage_info, 'input_tokens_details') and usage_info.input_tokens_details:
-                    if hasattr(usage_info.input_tokens_details, 'cached_tokens'):
-                        st.info(f"キャッシュされたトークン: {usage_info.input_tokens_details.cached_tokens}")
