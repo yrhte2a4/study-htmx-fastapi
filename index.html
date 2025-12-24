@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenAI Agent SDK MCPエージェント</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .chat-message {
+            animation: fadeInUp 0.4s ease-out;
+        }
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(15px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        .typing-indicator {
+            animation: pulse 1.5s infinite;
+        }
+        .tool-execution {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        /* チャットバブルの自然なスタイル */
+        .user-bubble {
+            background: #667eea;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.2);
+            border: none;
+        }
+        
+        .assistant-bubble {
+            background: #f1f5f9;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+            border: 1px solid #e2e8f0;
+        }
+        
+        .message-avatar {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.2);
+        }
+        
+        .assistant-avatar {
+            background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+            box-shadow: 0 2px 8px rgba(59, 130, 246, 0.2);
+        }
+        
+        .tool-bubble {
+            background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+            box-shadow: 0 4px 16px rgba(139, 92, 246, 0.2);
+            border: none;
+        }
+        
+        .hover-lift {
+            transition: all 0.2s ease;
+        }
+        
+        .hover-lift:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+        }
+        
+        /* ツールオーバーレイのスタイル */
+        .tools-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(4px);
+            z-index: 50;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.3s ease;
+        }
+        
+        .tools-overlay.show {
+            opacity: 1;
+            visibility: visible;
+        }
+        
+        .tools-panel {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0.9);
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+            max-width: 500px;
+            width: 90%;
+            max-height: 70vh;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+        
+        .tools-overlay.show .tools-panel {
+            transform: translate(-50%, -50%) scale(1);
+        }
+        
+        .tools-trigger {
+            position: relative;
+            cursor: pointer;
+        }
+        
+        .tools-trigger:hover .tools-tooltip {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+        }
+        
+        .tools-tooltip {
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%) translateY(10px);
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            white-space: nowrap;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.2s ease;
+            z-index: 10;
+        }
+        
+        .tools-tooltip::after {
+            content: '';
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            border: 4px solid transparent;
+            border-top-color: rgba(0, 0, 0, 0.8);
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen" x-data="chatApp()">
+    <!-- ヘッダー -->
+    <header class="bg-white shadow-sm border-b border-gray-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center py-4">
+                <div class="flex items-center space-x-3">
+                    <div class="w-10 h-10 bg-gradient-to-r from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
+                        <i class="fas fa-robot text-white text-lg"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-xl font-semibold text-gray-900">OpenAI Agent SDK MCPエージェント</h1>
+                        <p class="text-sm text-gray-500">Azure OpenAIとMCPサーバーを使用したエージェント</p>
+                    </div>
+                </div>
+                <button @click="showSettings = !showSettings" 
+                        class="p-2 text-gray-400 hover:text-gray-600 transition-colors">
+                    <i class="fas fa-cog text-lg"></i>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2">
+        <div class="flex justify-center">
+            <!-- メインチャットエリア（中央配置） -->
+            <div class="w-full max-w-4xl">
+                <div class="bg-white rounded-lg shadow-sm border border-gray-200 h-[calc(100vh-120px)] flex flex-col">
+                    <!-- チャットヘッダー -->
+                    <div class="p-4 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-purple-50">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center space-x-3">
+                                <div class="w-8 h-8 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center">
+                                    <i class="fas fa-comments text-white text-sm"></i>
+                                </div>
+                                <span class="font-medium text-gray-900">チャット</span>
+                                <!-- ツールアイコン -->
+                                <div class="tools-trigger ml-4" @click="showToolsOverlay = true">
+                                    <div class="flex items-center space-x-2 px-3 py-2 bg-purple-100 hover:bg-purple-200 rounded-lg transition-all duration-200 cursor-pointer group">
+                                        <i class="fas fa-tools text-purple-600 text-sm group-hover:rotate-12 transition-transform duration-200"></i>
+                                        <span class="text-xs font-medium text-purple-700" x-text="availableTools.length + '個のツール'"></span>
+                                    </div>
+                                    <div class="tools-tooltip">利用可能なツールを表示</div>
+                                </div>
+                            </div>
+                            <div class="flex items-center space-x-3">
+                                <!-- 設定ボタン -->
+                                <button @click="showSettings = !showSettings" 
+                                        class="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
+                                    <i class="fas fa-cog text-sm"></i>
+                                </button>
+                                <!-- 新規チャットボタン -->
+                                <button @click="clearChat()" 
+                                        class="flex items-center space-x-2 px-3 py-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all duration-200 group">
+                                    <i class="fas fa-plus text-sm group-hover:rotate-90 transition-transform duration-200"></i>
+                                    <span class="text-sm font-medium">新規チャット</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- チャットメッセージ -->
+                    <div class="flex-1 overflow-y-auto p-6 space-y-6" x-ref="chatContainer">
+                        <template x-for="message in messages" :key="message.id">
+                            <div class="chat-message" :class="message.type === 'user' ? 'flex justify-end' : 'flex justify-start'">
+                                <div class="flex items-end space-x-3 max-w-2xl" :class="message.type === 'user' ? 'flex-row-reverse space-x-reverse' : ''">
+                                    <!-- アバター -->
+                                    <div class="flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center message-avatar" 
+                                         :class="message.type === 'user' ? 'message-avatar' : 'assistant-avatar'">
+                                        <i :class="message.type === 'user' ? 'fas fa-user' : 'fas fa-robot'" class="text-white text-sm"></i>
+                                    </div>
+                                    
+                                    <!-- メッセージバブル -->
+                                    <div class="rounded-2xl px-6 py-4 hover-lift" 
+                                         :class="message.type === 'user' ? 'user-bubble text-white' : 'assistant-bubble text-gray-800'">
+                                        <!-- メッセージヘッダー -->
+                                        <div class="flex items-center mb-2">
+                                            <span class="text-xs font-semibold" 
+                                                  :class="message.type === 'user' ? 'text-blue-100' : 'text-gray-500'"
+                                                  x-text="message.type === 'user' ? 'あなた' : 'AIエージェント'"></span>
+                                            <span class="text-xs ml-2" 
+                                                  :class="message.type === 'user' ? 'text-blue-200' : 'text-gray-400'"
+                                                  x-text="message.timestamp"></span>
+                                        </div>
+                                        <!-- メッセージ内容 -->
+                                        <div class="text-sm leading-relaxed" x-html="message.content"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
+                        <!-- ツール実行履歴 -->
+                        <template x-for="execution in toolExecutions" :key="execution.id">
+                            <div class="chat-message flex justify-center">
+                                <div class="w-full max-w-3xl tool-bubble rounded-2xl p-6 text-white hover-lift">
+                                    <div class="flex items-center mb-4">
+                                        <div class="w-8 h-8 bg-white bg-opacity-20 rounded-full flex items-center justify-center mr-3">
+                                            <i class="fas fa-cog text-white text-sm animate-spin"></i>
+                                        </div>
+                                        <div>
+                                            <span class="font-semibold text-purple-100">ツール実行中</span>
+                                            <div class="flex items-center mt-1">
+                                                <span class="text-xs bg-white bg-opacity-20 text-white px-3 py-1 rounded-full" x-text="execution.name"></span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="bg-white bg-opacity-10 rounded-xl p-4">
+                                        <div class="text-xs text-purple-100 mb-2 font-medium">実行パラメータ:</div>
+                                        <pre class="text-xs text-white overflow-x-auto bg-black bg-opacity-20 p-3 rounded-lg" x-text="JSON.stringify(execution.arguments, null, 2)"></pre>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
+                        <!-- ローディング表示 -->
+                        <div x-show="isLoading" class="flex justify-start">
+                            <div class="flex items-end space-x-3 max-w-2xl">
+                                <div class="flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center assistant-avatar">
+                                    <i class="fas fa-robot text-white text-sm"></i>
+                                </div>
+                                <div class="assistant-bubble rounded-2xl px-6 py-4 hover-lift">
+                                    <div class="flex items-center space-x-3">
+                                        <div class="typing-indicator flex space-x-1">
+                                            <div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                                            <div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0.1s"></div>
+                                            <div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0.2s"></div>
+                                        </div>
+                                        <span class="text-sm text-gray-600 font-medium">思考中...</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 入力エリア -->
+                    <div class="p-6 border-t border-gray-200 bg-gradient-to-r from-gray-50 to-blue-50">
+                        <form @submit.prevent="sendMessage()" class="flex space-x-4">
+                            <div class="flex-1 relative">
+                                <input x-model="currentMessage" 
+                                       type="text" 
+                                       placeholder="質問を入力してください..."
+                                       class="w-full px-6 py-4 border-2 border-gray-200 rounded-2xl focus:ring-2 focus:ring-blue-500 focus:border-transparent shadow-lg backdrop-blur-sm bg-white bg-opacity-80 transition-all duration-200"
+                                       :disabled="isLoading">
+                            </div>
+                            <button type="submit" 
+                                    :disabled="isLoading || !currentMessage.trim()"
+                                    class="px-8 py-4 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-2xl hover:from-blue-600 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 shadow-lg hover:shadow-xl transform hover:-translate-y-1 flex items-center space-x-2">
+                                <i class="fas fa-paper-plane"></i>
+                                <span class="font-medium">送信</span>
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- サイドパネル（設定・使用量） -->
+        <div class="fixed top-20 right-6 space-y-4 z-40" x-show="showSettings || usage.total > 0">
+            <!-- 設定パネル -->
+            <div class="bg-white rounded-lg shadow-lg border border-gray-200 w-80" x-show="showSettings" x-transition>
+                <div class="p-4 border-b border-gray-200">
+                    <h3 class="text-lg font-medium text-gray-900 flex items-center">
+                        <i class="fas fa-cog mr-2 text-blue-500"></i>
+                        設定状況
+                    </h3>
+                </div>
+                <div class="p-4 space-y-3">
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm text-gray-600">Azure OpenAI エンドポイント</span>
+                        <span class="text-xs px-2 py-1 bg-green-100 text-green-800 rounded-full" x-text="config.endpoint ? '設定済み' : '未設定'"></span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm text-gray-600">デプロイメント名</span>
+                        <span class="text-xs px-2 py-1 bg-green-100 text-green-800 rounded-full" x-text="config.deployment ? '設定済み' : '未設定'"></span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm text-gray-600">APIバージョン</span>
+                        <span class="text-xs text-gray-500" x-text="config.apiVersion"></span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm text-gray-600">MCPサーバー</span>
+                        <span class="text-xs text-gray-500" x-text="config.mcpServer"></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- トークン使用量 -->
+            <div class="bg-white rounded-lg shadow-lg border border-gray-200 w-80" x-show="usage.total > 0" x-transition>
+                <div class="p-4 border-b border-gray-200">
+                    <h3 class="text-lg font-medium text-gray-900 flex items-center">
+                        <i class="fas fa-chart-bar mr-2 text-green-500"></i>
+                        トークン使用量
+                    </h3>
+                </div>
+                <div class="p-4 space-y-3">
+                    <div class="flex justify-between items-center">
+                        <span class="text-sm text-gray-600">入力</span>
+                        <span class="font-medium text-blue-600" x-text="usage.input.toLocaleString()"></span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-sm text-gray-600">出力</span>
+                        <span class="font-medium text-green-600" x-text="usage.output.toLocaleString()"></span>
+                    </div>
+                    <div class="flex justify-between items-center border-t pt-2">
+                        <span class="text-sm font-medium text-gray-900">合計</span>
+                        <span class="font-bold text-purple-600" x-text="usage.total.toLocaleString()"></span>
+                    </div>
+                    <div x-show="usage.cached > 0" class="text-xs text-gray-500 bg-blue-50 p-2 rounded">
+                        <i class="fas fa-memory mr-1"></i>
+                        キャッシュ: <span x-text="usage.cached.toLocaleString()"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ツールオーバーレイ -->
+    <div class="tools-overlay" :class="{ 'show': showToolsOverlay }" @click="showToolsOverlay = false">
+        <div class="tools-panel" @click.stop>
+            <div class="p-6 border-b border-gray-200 bg-gradient-to-r from-purple-50 to-blue-50">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-3">
+                        <div class="w-10 h-10 bg-gradient-to-r from-purple-500 to-blue-600 rounded-full flex items-center justify-center">
+                            <i class="fas fa-tools text-white text-lg"></i>
+                        </div>
+                        <div>
+                            <h3 class="text-lg font-semibold text-gray-900">利用可能なツール</h3>
+                            <p class="text-sm text-gray-600" x-text="availableTools.length + '個のツールが利用可能です'"></p>
+                        </div>
+                    </div>
+                    <button @click="showToolsOverlay = false" 
+                            class="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
+                        <i class="fas fa-times text-lg"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="p-6 max-h-96 overflow-y-auto">
+                <div class="space-y-4">
+                    <template x-for="(tool, index) in availableTools" :key="tool.name">
+                        <div class="p-4 bg-gradient-to-r from-gray-50 to-purple-50 rounded-xl border border-gray-200 hover:border-purple-300 transition-all duration-200 hover:shadow-md">
+                            <div class="flex items-start space-x-3">
+                                <div class="w-8 h-8 bg-gradient-to-r from-purple-500 to-blue-600 rounded-lg flex items-center justify-center flex-shrink-0 mt-1">
+                                    <i class="fas fa-wrench text-white text-sm"></i>
+                                </div>
+                                <div class="flex-1">
+                                    <div class="flex items-center mb-2">
+                                        <h4 class="font-semibold text-gray-900" x-text="tool.name"></h4>
+                                        <span class="ml-2 text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded-full" x-text="'#' + (index + 1)"></span>
+                                    </div>
+                                    <p class="text-sm text-gray-600 leading-relaxed" x-text="tool.description"></p>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+            <div class="p-4 bg-gray-50 border-t border-gray-200 text-center">
+                <p class="text-xs text-gray-500">これらのツールは質問に応じて自動的に使用されます</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function chatApp() {
+            return {
+                showSettings: false,
+                showToolsOverlay: false,
+                isLoading: false,
+                currentMessage: 'Bedrock AgentCoreではどんなことができる？AWSドキュメントを参照して教えて',
+                messages: [],
+                toolExecutions: [],
+                messageId: 1,
+                config: {
+                    endpoint: true, // 実際の実装では環境変数から取得
+                    deployment: true,
+                    apiVersion: '2024-02-15-preview',
+                    mcpServer: 'awslabs.aws-documentation-mcp-server@latest'
+                },
+                availableTools: [
+                    {
+                        name: 'search_documentation',
+                        description: 'AWSドキュメントを検索して最新の情報を取得します'
+                    },
+                    {
+                        name: 'get_service_info',
+                        description: 'AWSサービスの詳細情報を取得します'
+                    },
+                    {
+                        name: 'list_apis',
+                        description: 'サービスのAPI一覧を取得します'
+                    }
+                ],
+                usage: {
+                    input: 0,
+                    output: 0,
+                    total: 0,
+                    cached: 0
+                },
+
+                init() {
+                    // 初期メッセージ
+                    this.addMessage('assistant', 'こんにちは！Azure OpenAIとMCPサーバーを使用したエージェントです。AWSに関する質問をお気軽にどうぞ。');
+                },
+
+                addMessage(type, content) {
+                    this.messages.push({
+                        id: this.messageId++,
+                        type: type,
+                        content: content,
+                        timestamp: new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
+                    });
+                    this.$nextTick(() => {
+                        this.$refs.chatContainer.scrollTop = this.$refs.chatContainer.scrollHeight;
+                    });
+                },
+
+                addToolExecution(name, arguments) {
+                    this.toolExecutions.push({
+                        id: this.messageId++,
+                        name: name,
+                        arguments: arguments
+                    });
+                },
+
+                async sendMessage() {
+                    if (!this.currentMessage.trim() || this.isLoading) return;
+
+                    const userMessage = this.currentMessage;
+                    this.addMessage('user', userMessage);
+                    this.currentMessage = '';
+                    this.isLoading = true;
+
+                    try {
+                        // シミュレートされた応答（実際の実装では API を呼び出し）
+                        await this.simulateAgentResponse(userMessage);
+                    } catch (error) {
+                        this.addMessage('assistant', `エラーが発生しました: ${error.message}`);
+                    } finally {
+                        this.isLoading = false;
+                    }
+                },
+
+                async simulateAgentResponse(userMessage) {
+                    // ツール実行をシミュレート
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    
+                    if (userMessage.toLowerCase().includes('bedrock') || userMessage.toLowerCase().includes('aws')) {
+                        this.addToolExecution('search_documentation', {
+                            query: 'Bedrock AgentCore',
+                            service: 'bedrock',
+                            max_results: 5
+                        });
+                        
+                        await new Promise(resolve => setTimeout(resolve, 1500));
+                        
+                        const response = `
+                            <strong>Bedrock AgentCore</strong>について説明します。<br><br>
+                            
+                            Amazon Bedrock AgentCoreは、以下の機能を提供します：<br><br>
+                            
+                            • <strong>エージェント作成</strong>: カスタムAIエージェントを構築<br>
+                            • <strong>ナレッジベース統合</strong>: 独自のデータソースと連携<br>
+                            • <strong>アクション実行</strong>: 外部APIやサービスとの連携<br>
+                            • <strong>会話管理</strong>: セッション管理と履歴保持<br>
+                            • <strong>セキュリティ</strong>: IAMベースのアクセス制御<br><br>
+                            
+                            詳細な実装方法については、AWSドキュメントをご確認ください。
+                        `;
+                        
+                        this.addMessage('assistant', response);
+                        
+                        // 使用量を更新
+                        this.usage = {
+                            input: 1250,
+                            output: 890,
+                            total: 2140,
+                            cached: 320
+                        };
+                    } else {
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        this.addMessage('assistant', 'ご質問にお答えします。より具体的な情報が必要でしたら、詳しくお聞かせください。');
+                    }
+                },
+
+                clearChat() {
+                    this.messages = [];
+                    this.toolExecutions = [];
+                    this.usage = { input: 0, output: 0, total: 0, cached: 0 };
+                    this.init();
+                }
+            }
+        }
+    </script>
+</body>
+</html>

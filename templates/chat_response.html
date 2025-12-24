@@ -1,0 +1,82 @@
+<!-- AIエージェントの応答 -->
+<div class="chat-message flex justify-start">
+    <div class="flex items-end space-x-3 max-w-2xl">
+        <div class="flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center assistant-avatar">
+            <i class="fas fa-robot text-white text-sm"></i>
+        </div>
+        <div class="assistant-bubble rounded-2xl px-6 py-4 hover-lift text-gray-800">
+            <div class="flex items-center mb-2">
+                <span class="text-xs font-semibold text-gray-500">AIエージェント</span>
+                <span class="text-xs ml-2 text-gray-400">{{ format_time() }}</span>
+            </div>
+            <div class="text-sm leading-relaxed markdown-content" data-markdown-content>
+                {{ response.content }}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ツール実行履歴 -->
+{% if response.tool_executions %}
+<div class="chat-message flex justify-center">
+    <div class="w-full max-w-3xl tool-bubble rounded-2xl p-6 text-white hover-lift">
+        <div class="flex items-center mb-4">
+            <div class="w-8 h-8 bg-white bg-opacity-20 rounded-full flex items-center justify-center mr-3">
+                <i class="fas fa-cog text-white text-sm"></i>
+            </div>
+            <div>
+                <span class="font-semibold text-purple-100">ツール実行完了</span>
+                <div class="flex items-center mt-1">
+                    <span class="text-xs bg-white bg-opacity-20 text-white px-3 py-1 rounded-full">
+                        {{ response.tool_executions|length }}個のツールを実行
+                    </span>
+                </div>
+            </div>
+        </div>
+        
+        {% for tool in response.tool_executions %}
+        <div class="bg-white bg-opacity-10 rounded-xl p-4 mb-3">
+            <div class="flex items-center mb-2">
+                <i class="fas fa-wrench text-purple-100 mr-2"></i>
+                <span class="font-medium text-purple-100">{{ tool.name }}</span>
+                <span class="text-xs text-purple-200 ml-2">#{{ loop.index }}</span>
+            </div>
+            <div class="text-xs text-purple-100 mb-2 font-medium">実行パラメータ:</div>
+            <pre class="text-xs text-white overflow-x-auto bg-black bg-opacity-20 p-3 rounded-lg">{{ tool.arguments|tojson(indent=2) }}</pre>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- 使用量情報 -->
+{% if response.usage.total > 0 %}
+<div class="chat-message flex justify-center">
+    <div class="bg-gradient-to-r from-green-100 to-blue-100 rounded-xl p-4 text-gray-700 max-w-md">
+        <div class="flex items-center mb-2">
+            <i class="fas fa-chart-bar text-green-600 mr-2"></i>
+            <span class="font-medium text-gray-800">トークン使用量</span>
+        </div>
+        <div class="grid grid-cols-3 gap-2 text-xs">
+            <div class="text-center">
+                <div class="font-semibold text-blue-600">{{ response.usage.input }}</div>
+                <div class="text-gray-600">入力</div>
+            </div>
+            <div class="text-center">
+                <div class="font-semibold text-green-600">{{ response.usage.output }}</div>
+                <div class="text-gray-600">出力</div>
+            </div>
+            <div class="text-center">
+                <div class="font-semibold text-purple-600">{{ response.usage.total }}</div>
+                <div class="text-gray-600">合計</div>
+            </div>
+        </div>
+        {% if response.usage.cached > 0 %}
+        <div class="mt-2 text-xs text-gray-500 bg-blue-50 p-2 rounded">
+            <i class="fas fa-memory mr-1"></i>
+            キャッシュ: {{ response.usage.cached }}
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endif %}

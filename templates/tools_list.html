@@ -1,0 +1,99 @@
+<!-- ツールオーバーレイ -->
+<div class="fixed inset-0 bg-black bg-opacity-50 backdrop-blur-sm z-50 flex items-center justify-center" 
+     onclick="this.remove()">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-hidden" 
+         onclick="event.stopPropagation()">
+        <!-- ヘッダー -->
+        <div class="p-6 border-b border-gray-200 bg-gradient-to-r from-purple-50 to-blue-50">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                    <div class="w-10 h-10 bg-gradient-to-r from-purple-500 to-blue-600 rounded-full flex items-center justify-center">
+                        <i class="fas fa-tools text-white text-lg"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-lg font-semibold text-gray-900">利用可能なツール</h3>
+                        <p class="text-sm text-gray-600">{{ tools|length }}個のツールが利用可能です</p>
+                    </div>
+                </div>
+                <button onclick="this.closest('.fixed').remove()" 
+                        class="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
+                    <i class="fas fa-times text-lg"></i>
+                </button>
+            </div>
+        </div>
+        
+        <!-- ツール一覧 -->
+        <div class="p-6 max-h-96 overflow-y-auto">
+            <div class="space-y-4">
+                {% for tool in tools %}
+                <div class="p-4 bg-gradient-to-r from-gray-50 to-purple-50 rounded-xl border border-gray-200 hover:border-purple-300 transition-all duration-200 hover:shadow-md">
+                    <div class="flex items-start space-x-3">
+                        <div class="w-8 h-8 bg-gradient-to-r from-purple-500 to-blue-600 rounded-lg flex items-center justify-center flex-shrink-0 mt-1">
+                            <i class="fas fa-wrench text-white text-sm"></i>
+                        </div>
+                        <div class="flex-1">
+                            <div class="flex items-center mb-2">
+                                <button onclick="toggleToolDescription(this)" 
+                                        class="text-left hover:text-purple-600 transition-colors">
+                                    <h4 class="font-semibold text-gray-900">{{ tool.name }}</h4>
+                                </button>
+                                <span class="ml-2 text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded-full">#{{ loop.index }}</span>
+                                <i class="fas fa-chevron-down text-gray-400 ml-2 transition-transform duration-200" 
+                                   id="chevron-{{ loop.index }}"></i>
+                            </div>
+                            <div class="tool-description hidden" id="description-{{ loop.index }}">
+                                <div class="text-sm text-gray-600 leading-relaxed markdown-content" data-markdown-content>{{ tool.description }}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        
+        <!-- フッター -->
+        <div class="p-4 bg-gray-50 border-t border-gray-200 text-center">
+            <p class="text-xs text-gray-500">これらのツールは質問に応じて自動的に使用されます</p>
+        </div>
+    </div>
+</div>
+
+<script>
+function toggleToolDescription(button) {
+    const toolCard = button.closest('.p-4');
+    const description = toolCard.querySelector('.tool-description');
+    const chevron = toolCard.querySelector('[id^="chevron-"]');
+    
+    if (description.classList.contains('hidden')) {
+        description.classList.remove('hidden');
+        chevron.style.transform = 'rotate(180deg)';
+        
+        // マークダウンレンダリング
+        const markdownElement = description.querySelector('[data-markdown-content]');
+        if (markdownElement && !markdownElement.dataset.processed) {
+            let markdownText = markdownElement.textContent;
+            
+            // インデントを正規化（コードブロック誤認識を防ぐ）
+            const lines = markdownText.split('\n');
+            const normalizedLines = lines.map(line => {
+                // 行頭の余分なスペースを削除（ただし意図的なインデントは保持）
+                if (line.trim() === '') return line;
+                return line.replace(/^    /, ''); // 4つのスペースを削除
+            });
+            markdownText = normalizedLines.join('\n');
+            
+            const html = window.renderMarkdown ? window.renderMarkdown(markdownText) : markdownText;
+            markdownElement.innerHTML = html;
+            markdownElement.dataset.processed = 'true';
+            
+            // Prismでコードハイライト
+            if (typeof Prism !== 'undefined') {
+                Prism.highlightAll();
+            }
+        }
+    } else {
+        description.classList.add('hidden');
+        chevron.style.transform = 'rotate(0deg)';
+    }
+}
+</script>

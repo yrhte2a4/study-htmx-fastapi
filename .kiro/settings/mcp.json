@@ -1,0 +1,65 @@
+{
+  "mcpServers": {
+    "serena": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/oraios/serena",
+        "serena",
+        "start-mcp-server",
+        "--context",
+        "ide-assistant"
+      ],
+      "disabled": false,
+      "autoApprove": [
+        "activate_project",
+        "check_onboarding_performed",
+        "read_memory",
+        "get_symbols_overview",
+        "list_dir",
+        "find_symbol",
+        "search_for_pattern",
+        "initial_instructions",
+        "find_file"
+      ]
+    },
+    "context7": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@upstash/context7-mcp@latest"
+      ],
+      "disabled": false,
+      "autoApprove": [
+        "resolve-library-id",
+        "get-library-docs"
+      ]
+    },
+    "chrome-devtools": {
+      "command": "npx",
+      "args": [
+        "chrome-devtools-mcp@latest"
+      ],
+      "disabled": true,
+      "autoApprove": [
+        "new_page",
+        "list_console_messages",
+        "take_snapshot",
+        "click",
+        "list_network_requests",
+        "navigate_page",
+        "evaluate_script"
+      ]
+    },
+    "mcp-gemini-cli": {
+      "command": "npx",
+      "args": [
+        "mcp-gemini-cli",
+        "--allow-npx"
+      ],
+      "autoApprove": [
+        "chat"
+      ]
+    }
+  }
+}
